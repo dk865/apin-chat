@@ -1032,10 +1032,12 @@ jobs:
           ls -la ApinChat/
           
           # Check that we have the required Swift files
-          if [[ -f "ApinChat/ApinChatApp.swift" && -f "ApinChat/ContentView.swift" ]]; then
+          if [[ -f "ApinChat/ApinChatApp.swift" && -f "ApinChat/UI/ContentView.swift" ]]; then
             echo "✅ Required Swift files found"
           else
             echo "❌ Missing required Swift files"
+            echo "Checking file structure:"
+            find ApinChat -name "*.swift" -type f
             exit 1
           fi
 
