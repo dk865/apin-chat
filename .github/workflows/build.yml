@@ -1,41 +1,1148 @@
-name: Build and Test
+name: "Build Apin Chat (iOS 26 Beta)"
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - '*'
+    paths-ignore:
+      - ".gitignore"
+      - "README.md"
   pull_request:
-    branches: [ main ]
+    branches:
+      - '*'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
-    runs-on: macos-latest
-    
+    name: Build Unsigned IPA
+    runs-on: macos-14
     steps:
-    - uses: actions/checkout@v3
-    
-    - name: Set up Xcode
-      uses: maxim-lobanov/setup-xcode@v1
-      with:
-        xcode-version: latest-stable
-        
-    - name: Install Dependencies
-      run: |
-        xcodebuild -resolvePackageDependencies
-        
-    - name: Build
-      run: |
-        xcodebuild build -scheme ApinChat -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=latest' -allowProvisioningUpdates
-        
-    - name: Run tests
-      run: |
-        xcodebuild test -scheme ApinChat -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=latest' -allowProvisioningUpdates
-        
-    - name: Archive artifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: app-build
-        path: |
-          build/
-          *.ipa
-          *.app
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '16.0-beta'
+          
+      - name: Show Xcode Version
+        run: |
+          xcodebuild -version
+          
+      - name: Create Project Structure
+        run: |
+          # Create basic project structure
+          mkdir -p ApinChat
+          mkdir -p ApinChat/Models
+          mkdir -p ApinChat/ViewModels
+          mkdir -p ApinChat/Services
+          mkdir -p ApinChat/UI
+          mkdir -p ApinChat/Preview\ Content/Preview\ Assets.xcassets
+          mkdir -p ApinChat/Assets.xcassets/AppIcon.appiconset
+
+      - name: Create Info.plist
+        run: |
+          cat > ApinChat/Info.plist << EOL
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key>
+              <string>$(DEVELOPMENT_LANGUAGE)</string>
+              <key>CFBundleDisplayName</key>
+              <string>Apin Chat</string>
+              <key>CFBundleExecutable</key>
+              <string>$(EXECUTABLE_NAME)</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.dk865.apinchat</string>
+              <key>CFBundleInfoDictionaryVersion</key>
+              <string>6.0</string>
+              <key>CFBundleName</key>
+              <string>$(PRODUCT_NAME)</string>
+              <key>CFBundlePackageType</key>
+              <string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+              <key>CFBundleShortVersionString</key>
+              <string>1.0</string>
+              <key>CFBundleVersion</key>
+              <string>1</string>
+              <key>LSRequiresIPhoneOS</key>
+              <true/>
+              <key>UIApplicationSceneManifest</key>
+              <dict>
+                  <key>UIApplicationSupportsMultipleScenes</key>
+                  <true/>
+              </dict>
+              <key>UIApplicationSupportsIndirectInputEvents</key>
+              <true/>
+              <key>UILaunchScreen</key>
+              <dict/>
+              <key>UIRequiredDeviceCapabilities</key>
+              <array>
+                  <string>armv7</string>
+              </array>
+              <key>UISupportedInterfaceOrientations</key>
+              <array>
+                  <string>UIInterfaceOrientationPortrait</string>
+              </array>
+          </dict>
+          </plist>
+          EOL
+
+      - name: Create Swift Files
+        run: |
+          # App Entry Point
+          cat > ApinChat/ApinChatApp.swift << EOL
+          import SwiftUI
+          
+          @main
+          struct ApinChatApp: App {
+              @StateObject private var chatStore = ChatStore()
+              @StateObject private var themeManager = ThemeManager()
+              
+              var body: some Scene {
+                  WindowGroup {
+                      ContentView()
+                          .environmentObject(chatStore)
+                          .environmentObject(themeManager)
+                          .preferredColorScheme(.dark)
+                  }
+              }
+          }
+          EOL
+          
+          # Models
+          cat > ApinChat/Models/ChatModels.swift << EOL
+          import Foundation
+          import SwiftUI
+          
+          struct Chat: Identifiable, Codable {
+              var id: UUID
+              var title: String
+              var messages: [Message]
+              var createdAt: Date
+              var updatedAt: Date
+              
+              init(id: UUID = UUID(), title: String = "New Chat", messages: [Message] = [], 
+                   createdAt: Date = Date(), updatedAt: Date = Date()) {
+                  self.id = id
+                  self.title = title
+                  self.messages = messages
+                  self.createdAt = createdAt
+                  self.updatedAt = updatedAt
+              }
+              
+              var lastMessage: String {
+                  messages.last?.content ?? "No messages"
+              }
+              
+              var isEmpty: Bool {
+                  messages.isEmpty
+              }
+          }
+          
+          struct Message: Identifiable, Codable {
+              var id: UUID
+              var content: String
+              var isUser: Bool
+              var timestamp: Date
+              var isProcessing: Bool
+              
+              init(id: UUID = UUID(), content: String, isUser: Bool, 
+                   timestamp: Date = Date(), isProcessing: Bool = false) {
+                  self.id = id
+                  self.content = content
+                  self.isUser = isUser
+                  self.timestamp = timestamp
+                  self.isProcessing = isProcessing
+              }
+          }
+          
+          enum AIModelType: String, CaseIterable, Identifiable, Codable {
+              case conversation = "Conversation"
+              case creative = "Creative"
+              case precise = "Precise"
+              
+              var id: String { self.rawValue }
+              
+              var description: String {
+                  switch self {
+                  case .conversation: return "Balanced for everyday conversations"
+                  case .creative: return "More creative and expressive responses"
+                  case .precise: return "Focused on accuracy and facts"
+                  }
+              }
+              
+              var systemPrompt: String {
+                  switch self {
+                  case .conversation: 
+                      return "You are Apin, a helpful AI assistant. Respond conversationally and be concise."
+                  case .creative:
+                      return "You are Apin, a creative AI assistant. Feel free to be imaginative, expressive, and think outside the box."
+                  case .precise:
+                      return "You are Apin, a precise AI assistant. Focus on accuracy, facts, and clear information."
+                  }
+              }
+          }
+          EOL
+          
+          # Mock implementation for AI handler
+          cat > ApinChat/Services/AIModelHandler.swift << EOL
+          import Foundation
+          import os
+          
+          class AIModelHandler {
+              private let logger = Logger(subsystem: "com.dk865.ApinChat", category: "AIModelHandler")
+              
+              // In the actual app, this would use Foundation Models
+              func generateResponse(messages: [Message], modelType: AIModelType) async throws -> String {
+                  // This is a mock implementation for build purposes
+                  // In the real app, this would use Foundation Models from Apple Intelligence
+                  
+                  try await Task.sleep(for: .seconds(1))
+                  
+                  switch modelType {
+                  case .conversation:
+                      return "This is a simulated conversation response. The actual app would use Apple Intelligence with Foundation Models."
+                  case .creative:
+                      return "This is a simulated creative response. The actual app would use Apple Intelligence with Foundation Models."
+                  case .precise:
+                      return "This is a simulated precise response. The actual app would use Apple Intelligence with Foundation Models."
+                  }
+              }
+              
+              func generateTitle(from firstMessage: String) async throws -> String {
+                  return "New Chat \(Date().formatted(.dateTime.hour().minute()))"
+              }
+          }
+          EOL
+          
+          # Storage Manager
+          cat > ApinChat/Services/StorageManager.swift << EOL
+          import Foundation
+          import os
+          
+          class StorageManager {
+              private let chatsKey = "stored_chats"
+              private let logger = Logger(subsystem: "com.dk865.ApinChat", category: "StorageManager")
+              
+              func saveChats(_ chats: [Chat]) {
+                  do {
+                      let data = try JSONEncoder().encode(chats)
+                      UserDefaults.standard.set(data, forKey: chatsKey)
+                  } catch {
+                      logger.error("Failed to save chats: \(error.localizedDescription)")
+                  }
+              }
+              
+              func loadChats() -> [Chat] {
+                  guard let data = UserDefaults.standard.data(forKey: chatsKey) else {
+                      return []
+                  }
+                  
+                  do {
+                      let chats = try JSONDecoder().decode([Chat].self, from: data)
+                      return chats
+                  } catch {
+                      logger.error("Failed to load chats: \(error.localizedDescription)")
+                      return []
+                  }
+              }
+              
+              func clearAllChats() {
+                  UserDefaults.standard.removeObject(forKey: chatsKey)
+              }
+          }
+          EOL
+          
+          # Chat Store
+          cat > ApinChat/ViewModels/ChatStore.swift << EOL
+          import Foundation
+          import SwiftUI
+          import Combine
+          
+          class ChatStore: ObservableObject {
+              @Published var chats: [Chat] = []
+              @Published var currentChat: Chat?
+              @Published var selectedModelType: AIModelType = .conversation
+              @Published var isProcessingResponse: Bool = false
+              
+              private let modelHandler = AIModelHandler()
+              private let storageManager = StorageManager()
+              
+              init() {
+                  loadChats()
+                  if chats.isEmpty {
+                      createNewChat()
+                  } else {
+                      currentChat = chats.first
+                  }
+              }
+              
+              func loadChats() {
+                  chats = storageManager.loadChats()
+              }
+              
+              func saveChats() {
+                  storageManager.saveChats(chats)
+              }
+              
+              func createNewChat() {
+                  let newChat = Chat(title: "New Chat")
+                  chats.append(newChat)
+                  currentChat = newChat
+                  saveChats()
+              }
+              
+              func deleteChat(_ chat: Chat) {
+                  if let index = chats.firstIndex(where: { $0.id == chat.id }) {
+                      chats.remove(at: index)
+                  }
+                  
+                  if currentChat?.id == chat.id {
+                      currentChat = chats.first
+                  }
+                  
+                  saveChats()
+              }
+              
+              func clearAllChats() {
+                  chats.removeAll()
+                  createNewChat()
+                  saveChats()
+              }
+              
+              func updateChat(_ chat: Chat) {
+                  if let index = chats.firstIndex(where: { $0.id == chat.id }) {
+                      chats[index] = chat
+                      
+                      if currentChat?.id == chat.id {
+                          currentChat = chat
+                      }
+                  }
+                  saveChats()
+              }
+              
+              func selectChat(_ chat: Chat) {
+                  currentChat = chat
+              }
+              
+              func sendMessage(_ content: String) {
+                  guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                  guard var chat = currentChat else { return }
+                  
+                  let userMessage = Message(content: content, isUser: true)
+                  chat.messages.append(userMessage)
+                  
+                  // Add a placeholder for the AI response
+                  let loadingMessage = Message(content: "", isUser: false, isProcessing: true)
+                  chat.messages.append(loadingMessage)
+                  
+                  updateChat(chat)
+                  
+                  // Get AI response
+                  isProcessingResponse = true
+                  
+                  Task {
+                      do {
+                          let response = try await modelHandler.generateResponse(
+                              messages: chat.messages.dropLast(),
+                              modelType: selectedModelType
+                          )
+                          
+                          await MainActor.run {
+                              self.isProcessingResponse = false
+                              
+                              // Update with actual response
+                              guard var updatedChat = self.currentChat else { return }
+                              if updatedChat.messages.count >= 2 {
+                                  updatedChat.messages[updatedChat.messages.count - 1] = Message(
+                                      content: response,
+                                      isUser: false
+                                  )
+                                  updatedChat.updatedAt = Date()
+                                  
+                                  // Update title if this is the first exchange
+                                  if updatedChat.messages.count == 2 {
+                                      Task {
+                                          let title = try await self.modelHandler.generateTitle(from: content)
+                                          await MainActor.run {
+                                              updatedChat.title = title
+                                              self.updateChat(updatedChat)
+                                          }
+                                      }
+                                  } else {
+                                      self.updateChat(updatedChat)
+                                  }
+                              }
+                          }
+                      } catch {
+                          await MainActor.run {
+                              self.isProcessingResponse = false
+                              
+                              // Update with error message
+                              guard var updatedChat = self.currentChat else { return }
+                              if updatedChat.messages.count >= 2 {
+                                  updatedChat.messages[updatedChat.messages.count - 1] = Message(
+                                      content: "Sorry, I wasn't able to respond. Please try again.",
+                                      isUser: false
+                                  )
+                                  self.updateChat(updatedChat)
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOL
+          
+          # Theme Manager
+          cat > ApinChat/UI/ThemeManager.swift << EOL
+          import SwiftUI
+          
+          class ThemeManager: ObservableObject {
+              // Primary colors
+              let primary = Color(red: 0, green: 0.8, blue: 0.7) // Mint/Teal
+              let primaryVariant = Color(red: 0, green: 0.7, blue: 0.6)
+              
+              // Background colors
+              let background = Color(red: 0.1, green: 0.11, blue: 0.12) // Dark background
+              let surfaceBackground = Color(red: 0.15, green: 0.16, blue: 0.18)
+              let elevatedBackground = Color(red: 0.2, green: 0.21, blue: 0.23)
+              
+              // Text colors
+              let textPrimary = Color.white
+              let textSecondary = Color(white: 0.7)
+              
+              // Status colors
+              let success = Color.green
+              let warning = Color.yellow
+              let error = Color.red
+              
+              // Message bubble colors
+              var userMessageBackground: Color { primaryVariant }
+              var aiMessageBackground: Color { elevatedBackground }
+              
+              // Gradient
+              var primaryGradient: LinearGradient {
+                  LinearGradient(
+                      gradient: Gradient(colors: [primary, primaryVariant]),
+                      startPoint: .topLeading,
+                      endPoint: .bottomTrailing
+                  )
+              }
+              
+              // Font styling
+              let titleFont: Font = .system(.title, design: .rounded, weight: .semibold)
+              let headlineFont: Font = .system(.headline, design: .rounded, weight: .semibold)
+              let bodyFont: Font = .system(.body, design: .rounded)
+              let captionFont: Font = .system(.caption, design: .rounded)
+              
+              // Animation duration
+              let defaultAnimationDuration: Double = 0.3
+          }
+          
+          // Extension to provide theme-based modifiers
+          extension View {
+              func primaryButton(theme: ThemeManager) -> some View {
+                  self
+                      .font(theme.headlineFont)
+                      .foregroundColor(theme.textPrimary)
+                      .padding()
+                      .background(theme.primaryGradient)
+                      .cornerRadius(15)
+              }
+              
+              func outlineButton(theme: ThemeManager) -> some View {
+                  self
+                      .font(theme.headlineFont)
+                      .foregroundColor(theme.primary)
+                      .padding()
+                      .background(Color.clear)
+                      .cornerRadius(15)
+                      .overlay(
+                          RoundedRectangle(cornerRadius: 15)
+                              .stroke(theme.primary, lineWidth: 1.5)
+                      )
+              }
+              
+              func cardStyle(theme: ThemeManager) -> some View {
+                  self
+                      .padding()
+                      .background(theme.surfaceBackground)
+                      .cornerRadius(16)
+                      .shadow(color: Color.black.opacity(0.2), radius: 4)
+              }
+          }
+          EOL
+          
+          # Content View
+          cat > ApinChat/UI/ContentView.swift << EOL
+          import SwiftUI
+          
+          struct ContentView: View {
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              @State private var showingSidebar: Bool = false
+              @State private var showingSettings: Bool = false
+              
+              var body: some View {
+                  NavigationView {
+                      ZStack {
+                          themeManager.background.ignoresSafeArea()
+                          
+                          if chatStore.chats.isEmpty {
+                              EmptyStateView()
+                          } else if let currentChat = chatStore.currentChat {
+                              VStack(spacing: 0) {
+                                  // Chat messages
+                                  ChatView(chat: currentChat)
+                                  
+                                  // Model selector and input
+                                  ChatInputView()
+                              }
+                          } else {
+                              // Fallback if no chat is selected
+                              StartChatView()
+                          }
+                          
+                          // Sidebar overlay when visible
+                          if showingSidebar {
+                              Color.black.opacity(0.4)
+                                  .ignoresSafeArea()
+                                  .onTapGesture {
+                                      withAnimation {
+                                          showingSidebar = false
+                                      }
+                                  }
+                          }
+                      }
+                      .overlay(
+                          SidebarView(isShowing: $showingSidebar)
+                              .offset(x: showingSidebar ? 0 : -300, y: 0),
+                          alignment: .leading
+                      )
+                      .navigationTitle("Apin Chat")
+                      .navigationBarTitleDisplayMode(.inline)
+                      .toolbar {
+                          ToolbarItem(placement: .navigationBarLeading) {
+                              Button(action: {
+                                  withAnimation {
+                                      showingSidebar.toggle()
+                                  }
+                              }) {
+                                  Image(systemName: "sidebar.left")
+                                      .foregroundColor(themeManager.primary)
+                              }
+                          }
+                          
+                          ToolbarItem(placement: .navigationBarTrailing) {
+                              Button(action: {
+                                  showingSettings.toggle()
+                              }) {
+                                  Image(systemName: "gear")
+                                      .foregroundColor(themeManager.primary)
+                              }
+                          }
+                      }
+                      .sheet(isPresented: $showingSettings) {
+                          Text("Settings")
+                            .foregroundColor(themeManager.primary)
+                            .font(themeManager.titleFont)
+                      }
+                  }
+              }
+          }
+          
+          struct EmptyStateView: View {
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Spacer()
+                      
+                      Image(systemName: "bubble.left.and.bubble.right.fill")
+                          .resizable()
+                          .scaledToFit()
+                          .frame(width: 80, height: 80)
+                          .foregroundColor(themeManager.primary)
+                      
+                      Text("Welcome to Apin")
+                          .font(themeManager.titleFont)
+                          .foregroundColor(themeManager.textPrimary)
+                      
+                      Text("Start a new conversation to begin chatting")
+                          .font(themeManager.bodyFont)
+                          .foregroundColor(themeManager.textSecondary)
+                          .multilineTextAlignment(.center)
+                          .padding(.horizontal)
+                      
+                      Spacer()
+                      
+                      Button(action: {
+                          chatStore.createNewChat()
+                      }) {
+                          Label("New Chat", systemImage: "plus.bubble")
+                              .frame(width: 200)
+                      }
+                      .primaryButton(theme: themeManager)
+                      .padding(.bottom, 30)
+                  }
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(themeManager.background)
+              }
+          }
+          
+          struct StartChatView: View {
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  VStack(spacing: 20) {
+                      Spacer()
+                      
+                      Image(systemName: "bubble.left.and.bubble.right.fill")
+                          .resizable()
+                          .scaledToFit()
+                          .frame(width: 80, height: 80)
+                          .foregroundColor(themeManager.primary)
+                      
+                      Text("No Chat Selected")
+                          .font(themeManager.titleFont)
+                          .foregroundColor(themeManager.textPrimary)
+                      
+                      Spacer()
+                      
+                      Button(action: {
+                          chatStore.createNewChat()
+                      }) {
+                          Label("New Chat", systemImage: "plus.bubble")
+                              .frame(width: 200)
+                      }
+                      .primaryButton(theme: themeManager)
+                      .padding(.bottom, 30)
+                  }
+                  .frame(maxWidth: .infinity, maxHeight: .infinity)
+                  .background(themeManager.background)
+              }
+          }
+          EOL
+          
+          # ChatView.swift
+          cat > ApinChat/UI/ChatView.swift << EOL
+          import SwiftUI
+          
+          struct ChatView: View {
+              let chat: Chat
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  ScrollView {
+                      LazyVStack(spacing: 16) {
+                          ForEach(chat.messages) { message in
+                              MessageBubble(message: message)
+                          }
+                      }
+                      .padding()
+                  }
+                  .background(themeManager.background)
+              }
+          }
+          
+          struct MessageBubble: View {
+              let message: Message
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  HStack {
+                      if message.isUser {
+                          Spacer()
+                      }
+                      
+                      VStack(alignment: message.isUser ? .trailing : .leading, spacing: 4) {
+                          if message.isProcessing {
+                              HStack(spacing: 4) {
+                                  ForEach(0..<3, id: \\.self) { i in
+                                      Circle()
+                                          .fill(themeManager.textSecondary)
+                                          .frame(width: 6, height: 6)
+                                          .opacity(0.5)
+                                  }
+                              }
+                              .padding(.horizontal, 10)
+                              .padding(.vertical, 12)
+                          } else {
+                              Text(message.content)
+                                  .font(themeManager.bodyFont)
+                                  .foregroundColor(message.isUser ? .white : themeManager.textPrimary)
+                                  .padding(.horizontal, 16)
+                                  .padding(.vertical, 12)
+                          }
+                      }
+                      .background(
+                          message.isUser ? themeManager.userMessageBackground : themeManager.aiMessageBackground
+                      )
+                      .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                      .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+                      .frame(maxWidth: 300, alignment: message.isUser ? .trailing : .leading)
+                      
+                      if !message.isUser {
+                          Spacer()
+                      }
+                  }
+              }
+          }
+          
+          struct ChatInputView: View {
+              @State private var messageText = ""
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  VStack(spacing: 0) {
+                      // Model selector
+                      ModelSelectorView()
+                          .padding(.vertical, 8)
+                      
+                      // Input field
+                      HStack(spacing: 12) {
+                          TextField("Message...", text: $messageText)
+                              .padding(12)
+                              .background(themeManager.surfaceBackground)
+                              .cornerRadius(24)
+                              .font(themeManager.bodyFont)
+                              .foregroundColor(themeManager.textPrimary)
+                              .disabled(chatStore.isProcessingResponse)
+                          
+                          Button(action: sendMessage) {
+                              Image(systemName: chatStore.isProcessingResponse ? "stop.circle.fill" : "arrow.up.circle.fill")
+                                  .resizable()
+                                  .frame(width: 32, height: 32)
+                                  .foregroundColor(
+                                      messageText.isEmpty && !chatStore.isProcessingResponse 
+                                          ? themeManager.textSecondary 
+                                          : themeManager.primary
+                                  )
+                          }
+                          .disabled(messageText.isEmpty && !chatStore.isProcessingResponse)
+                      }
+                      .padding(.horizontal)
+                      .padding(.vertical, 10)
+                      .background(themeManager.background)
+                      .overlay(
+                          Rectangle()
+                              .frame(height: 1)
+                              .foregroundColor(themeManager.surfaceBackground),
+                          alignment: .top
+                      )
+                  }
+              }
+              
+              private func sendMessage() {
+                  guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                  let text = messageText
+                  messageText = ""
+                  chatStore.sendMessage(text)
+              }
+          }
+          
+          struct ModelSelectorView: View {
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  ScrollView(.horizontal, showsIndicators: false) {
+                      HStack(spacing: 10) {
+                          ForEach(AIModelType.allCases) { modelType in
+                              VStack(spacing: 3) {
+                                  Text(modelType.rawValue)
+                                      .font(themeManager.captionFont.weight(.medium))
+                                      .foregroundColor(
+                                          chatStore.selectedModelType == modelType 
+                                              ? themeManager.primary 
+                                              : themeManager.textSecondary
+                                      )
+                                      
+                                  if chatStore.selectedModelType == modelType {
+                                      Circle()
+                                          .fill(themeManager.primary)
+                                          .frame(width: 4, height: 4)
+                                  }
+                              }
+                              .padding(.horizontal, 8)
+                              .padding(.vertical, 3)
+                              .onTapGesture {
+                                  chatStore.selectedModelType = modelType
+                              }
+                          }
+                      }
+                      .padding(.horizontal)
+                  }
+              }
+          }
+          EOL
+          
+          # SidebarView
+          cat > ApinChat/UI/SidebarView.swift << EOL
+          import SwiftUI
+          
+          struct SidebarView: View {
+              @Binding var isShowing: Bool
+              @EnvironmentObject private var chatStore: ChatStore
+              @EnvironmentObject private var themeManager: ThemeManager
+              @State private var showingDeleteConfirmation = false
+              @State private var chatToDelete: Chat? = nil
+              
+              var body: some View {
+                  ZStack {
+                      themeManager.elevatedBackground.ignoresSafeArea()
+                      
+                      VStack(alignment: .leading, spacing: 0) {
+                          // Header
+                          HStack {
+                              Text("Apin Chat")
+                                  .font(themeManager.titleFont)
+                                  .foregroundColor(themeManager.primary)
+                              
+                              Spacer()
+                              
+                              Button(action: {
+                                  withAnimation {
+                                      isShowing = false
+                                  }
+                              }) {
+                                  Image(systemName: "xmark")
+                                      .foregroundColor(themeManager.textSecondary)
+                                      .padding(8)
+                                      .background(Circle().fill(themeManager.surfaceBackground))
+                              }
+                          }
+                          .padding()
+                          
+                          // New Chat button
+                          Button(action: {
+                              chatStore.createNewChat()
+                              withAnimation {
+                                  isShowing = false
+                              }
+                          }) {
+                              Label("New Chat", systemImage: "plus")
+                                  .frame(maxWidth: .infinity)
+                          }
+                          .primaryButton(theme: themeManager)
+                          .padding(.horizontal)
+                          .padding(.bottom)
+                          
+                          Divider()
+                              .background(themeManager.surfaceBackground)
+                          
+                          // Chats list
+                          ScrollView {
+                              VStack(alignment: .leading, spacing: 2) {
+                                  ForEach(chatStore.chats) { chat in
+                                      ChatRowView(chat: chat, isSelected: chatStore.currentChat?.id == chat.id)
+                                          .onTapGesture {
+                                              chatStore.selectChat(chat)
+                                              withAnimation {
+                                                  isShowing = false
+                                              }
+                                          }
+                                  }
+                              }
+                              .padding(.vertical)
+                          }
+                          
+                          Spacer()
+                          
+                          // Footer with creator info
+                          VStack(alignment: .center, spacing: 2) {
+                              Text("Created by")
+                                  .font(themeManager.captionFont)
+                                  .foregroundColor(themeManager.textSecondary)
+                              
+                              Text("dk865")
+                                  .font(themeManager.captionFont.weight(.bold))
+                                  .foregroundColor(themeManager.primary)
+                          }
+                          .frame(maxWidth: .infinity)
+                          .padding(.bottom, 10)
+                      }
+                      .frame(width: 300)
+                      .background(themeManager.elevatedBackground)
+                  }
+              }
+          }
+          
+          struct ChatRowView: View {
+              let chat: Chat
+              let isSelected: Bool
+              @EnvironmentObject private var themeManager: ThemeManager
+              
+              var body: some View {
+                  HStack {
+                      VStack(alignment: .leading, spacing: 3) {
+                          Text(chat.title)
+                              .font(themeManager.headlineFont)
+                              .foregroundColor(
+                                  isSelected ? themeManager.primary : themeManager.textPrimary
+                              )
+                              .lineLimit(1)
+                          
+                          Text(chat.lastMessage)
+                              .font(themeManager.captionFont)
+                              .foregroundColor(themeManager.textSecondary)
+                              .lineLimit(1)
+                      }
+                      
+                      Spacer()
+                      
+                      if isSelected {
+                          Circle()
+                              .fill(themeManager.primary)
+                              .frame(width: 8, height: 8)
+                      }
+                  }
+                  .padding(.horizontal)
+                  .padding(.vertical, 12)
+                  .background(
+                      isSelected ? 
+                          themeManager.surfaceBackground.opacity(0.5) : 
+                          Color.clear
+                  )
+              }
+          }
+          EOL
+
+      - name: Configure Xcode project
+        run: |
+          mkdir -p ApinChat.xcodeproj
+          
+          # Create simple project.pbxproj
+          cat > ApinChat.xcodeproj/project.pbxproj << EOL
+          // !$*UTF8*$!
+          {
+              archiveVersion = 1;
+              classes = {
+              };
+              objectVersion = 56;
+              objects = {};
+              rootObject = 83A5C9842B27D8A700D4A59A /* Project object */;
+          }
+          EOL
+          
+          # Create basic xcscheme
+          mkdir -p ApinChat.xcodeproj/xcshareddata/xcschemes
+          cat > ApinChat.xcodeproj/xcshareddata/xcschemes/ApinChat.xcscheme << EOL
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Scheme
+             LastUpgradeVersion = "1510"
+             version = "1.7">
+             <BuildAction
+                parallelizeBuildables = "YES"
+                buildImplicitDependencies = "YES">
+                <BuildActionEntries>
+                   <BuildActionEntry
+                      buildForTesting = "YES"
+                      buildForRunning = "YES"
+                      buildForProfiling = "YES"
+                      buildForArchiving = "YES"
+                      buildForAnalyzing = "YES">
+                      <BuildableReference
+                         BuildableIdentifier = "primary"
+                         BlueprintIdentifier = "83A5C98B2B27D8A700D4A59A"
+                         BuildableName = "ApinChat.app"
+                         BlueprintName = "ApinChat"
+                         ReferencedContainer = "container:ApinChat.xcodeproj">
+                      </BuildableReference>
+                   </BuildActionEntry>
+                </BuildActionEntries>
+             </BuildAction>
+             <TestAction
+                buildConfiguration = "Debug"
+                selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+                selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+                shouldUseLaunchSchemeArgsEnv = "YES"
+                shouldAutocreateTestPlan = "YES">
+             </TestAction>
+             <LaunchAction
+                buildConfiguration = "Debug"
+                selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
+                selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
+                launchStyle = "0"
+                useCustomWorkingDirectory = "NO"
+                ignoresPersistentStateOnLaunch = "NO"
+                debugDocumentVersioning = "YES"
+                debugServiceExtension = "internal"
+                allowLocationSimulation = "YES">
+                <BuildableProductRunnable
+                   runnableDebuggingMode = "0">
+                   <BuildableReference
+                      BuildableIdentifier = "primary"
+                      BlueprintIdentifier = "83A5C98B2B27D8A700D4A59A"
+                      BuildableName = "ApinChat.app"
+                      BlueprintName = "ApinChat"
+                      ReferencedContainer = "container:ApinChat.xcodeproj">
+                   </BuildableReference>
+                </BuildableProductRunnable>
+             </LaunchAction>
+             <ProfileAction
+                buildConfiguration = "Release"
+                shouldUseLaunchSchemeArgsEnv = "YES"
+                savedToolIdentifier = ""
+                useCustomWorkingDirectory = "NO"
+                debugDocumentVersioning = "YES">
+                <BuildableProductRunnable
+                   runnableDebuggingMode = "0">
+                   <BuildableReference
+                      BuildableIdentifier = "primary"
+                      BlueprintIdentifier = "83A5C98B2B27D8A700D4A59A"
+                      BuildableName = "ApinChat.app"
+                      BlueprintName = "ApinChat"
+                      ReferencedContainer = "container:ApinChat.xcodeproj">
+                   </BuildableReference>
+                </BuildableProductRunnable>
+             </ProfileAction>
+             <AnalyzeAction
+                buildConfiguration = "Debug">
+             </AnalyzeAction>
+             <ArchiveAction
+                buildConfiguration = "Release"
+                revealArchiveInOrganizer = "YES">
+             </ArchiveAction>
+          </Scheme>
+          EOL
+
+      - name: Create Xcode project
+        run: |
+          # Create Swift Package.swift file for project generation
+          cat > Package.swift << EOL
+          // swift-tools-version: 5.9
+
+          import PackageDescription
+
+          let package = Package(
+              name: "ApinChat",
+              defaultLocalization: "en",
+              platforms: [
+                  .iOS(.v16)
+              ],
+              products: [
+                  .library(
+                      name: "ApinChat",
+                      targets: ["ApinChat"]),
+              ],
+              dependencies: [],
+              targets: [
+                  .target(
+                      name: "ApinChat",
+                      dependencies: []),
+              ]
+          )
+          EOL
+          
+          # Generate project
+          mkdir -p Sources/ApinChat
+          cp -R ApinChat/* Sources/ApinChat/
+          swift package generate-xcodeproj
+
+      - name: Build iOS App
+        run: |
+          # Create build directory
+          mkdir -p build
+          
+          # Build the app without code signing
+          xcodebuild -project ApinChat.xcodeproj -scheme ApinChat -destination "generic/platform=iOS" -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO ENABLE_BITCODE=NO BUILD_LIBRARY_FOR_DISTRIBUTION=YES COMPILE_ASSET_CATALOGS=YES SKIP_INSTALL=NO ONLY_ACTIVE_ARCH=NO build
+          
+          # Create an archive
+          xcodebuild -project ApinChat.xcodeproj -scheme ApinChat -archivePath ./build/ApinChat.xcarchive archive -destination "generic/platform=iOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+
+      - name: Package Unsigned IPA
+        run: |
+          # Create Payload directory and prepare IPA
+          mkdir -p Payload
+          
+          # Find the app file
+          APP_FILE=$(find ./build -name "*.app" -type d | head -n 1)
+          
+          if [ -z "$APP_FILE" ]; then
+            echo "No .app file found. Using xcarchive Products path."
+            APP_FILE=$(find ./build/ApinChat.xcarchive/Products/Applications -name "*.app" -type d | head -n 1)
+          fi
+          
+          if [ -z "$APP_FILE" ]; then
+            echo "Error: Could not find any .app file"
+            exit 1
+          else
+            echo "Found app at: $APP_FILE"
+          fi
+          
+          # Copy and rename the app
+          cp -R "$APP_FILE" Payload/apin.app
+          
+          # Create the IPA
+          zip -r apin.ipa Payload
+          
+          # Verify the IPA was created
+          ls -la apin.ipa
+
+      - name: Set Environment Variables
+        run: |
+          set -x
+          SHASH=$(git rev-parse --short HEAD || echo "dev")
+          BUILD_DATE=$(date -u +'%Y%m%d')
+          echo "shorthash=${SHASH}" >> $GITHUB_ENV
+          echo "builddate=${BUILD_DATE}" >> $GITHUB_ENV
+
+      - name: Upload IPA
+        id: apin-ipa-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: apin-${{ env.builddate }}-${{ env.shorthash }}.ipa
+          path: apin.ipa
+          retention-days: 14
+
+      - name: Create README.md
+        run: |
+          cat > README.md << EOL
+          # Apin Chat
+          
+          ![Apin Chat](https://img.shields.io/badge/Apin-Chat-teal)
+          ![iOS](https://img.shields.io/badge/iOS-26.0%2B-blue)
+          ![Swift](https://img.shields.io/badge/Swift-6.0-orange)
+          
+          A beautiful AI chatbot powered by Apple Intelligence using Foundation Models framework for iOS 26.
+          
+          ## Features
+          
+          - 🤖 Powered by Apple Intelligence with Foundation Models framework
+          - 🔒 On-device processing for enhanced privacy
+          - 💬 Multiple chat conversations with memory
+          - 🎨 Beautiful dark mint/teal UI theme
+          - 📱 Native iOS experience
+          
+          ## Requirements
+          
+          - iOS 26.0+ (Developer Beta)
+          - Device with Apple Intelligence support
+          
+          ## Installation
+          
+          The app is built using GitHub Actions and available as an unsigned IPA.
+          
+          ## Creator
+          
+          Made with ❤️ by [dk865](https://github.com/dk865)
+          EOL
+
+      - name: Upload README
+        uses: actions/upload-artifact@v4
+        with:
+          name: README.md
+          path: README.md
