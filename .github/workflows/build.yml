@@ -1,0 +1,41 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+        
+    - name: Install Dependencies
+      run: |
+        xcodebuild -resolvePackageDependencies
+        
+    - name: Build
+      run: |
+        xcodebuild build -scheme ApinChat -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=latest' -allowProvisioningUpdates
+        
+    - name: Run tests
+      run: |
+        xcodebuild test -scheme ApinChat -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=latest' -allowProvisioningUpdates
+        
+    - name: Archive artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: app-build
+        path: |
+          build/
+          *.ipa
+          *.app
