@@ -1,24 +1,32 @@
 import Foundation
 import SwiftUI
 import Combine
-import Foundation
+import FoundationModels
 
 class ChatStore: ObservableObject {
     @Published var chats: [Chat] = []
     @Published var currentChat: Chat?
     @Published var selectedModelType: AIModelType = .conversation
     @Published var isProcessingResponse: Bool = false
+    @Published var modelAvailability: SystemLanguageModel.Availability = .unavailable(.modelNotReady)
+    @Published var showingModelUnavailableAlert: Bool = false
     
     private let modelHandler = AIModelHandler()
     private let storageManager = StorageManager()
     
     init() {
         loadChats()
+        checkModelAvailability()
+        
         if chats.isEmpty {
             createNewChat()
         } else {
             currentChat = chats.first
         }
+    }
+    
+    func checkModelAvailability() {
+        modelAvailability = modelHandler.modelAvailability
     }
     
     func loadChats() {
@@ -73,6 +81,13 @@ class ChatStore: ObservableObject {
         guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         guard var chat = currentChat else { return }
         
+        // Check model availability before sending
+        checkModelAvailability()
+        guard modelAvailability == .available else {
+            showingModelUnavailableAlert = true
+            return
+        }
+        
         let userMessage = Message(content: content, isUser: true)
         chat.messages.append(userMessage)
         
@@ -88,7 +103,7 @@ class ChatStore: ObservableObject {
         Task {
             do {
                 let response = try await modelHandler.generateResponse(
-                    messages: chat.messages.dropLast(),
+                    messages: Array(chat.messages.dropLast()),
                     modelType: selectedModelType
                 )
                 
@@ -107,9 +122,15 @@ class ChatStore: ObservableObject {
                         // Update title if this is the first exchange
                         if updatedChat.messages.count == 2 {
                             Task {
-                                let title = try await self.modelHandler.generateTitle(from: content)
-                                await MainActor.run {
-                                    updatedChat.title = title
+                                do {
+                                    let title = try await self.modelHandler.generateTitle(from: content)
+                                    await MainActor.run {
+                                        updatedChat.title = title
+                                        self.updateChat(updatedChat)
+                                    }
+                                } catch {
+                                    // If title generation fails, use default
+                                    updatedChat.title = "New Chat"
                                     self.updateChat(updatedChat)
                                 }
                             }
@@ -122,11 +143,18 @@ class ChatStore: ObservableObject {
                 await MainActor.run {
                     self.isProcessingResponse = false
                     
-                    // Update with error message
+                    // Update with error message based on the specific error
                     guard var updatedChat = self.currentChat else { return }
                     if updatedChat.messages.count >= 2 {
+                        let errorMessage: String
+                        if let modelError = error as? ModelError {
+                            errorMessage = modelError.localizedDescription
+                        } else {
+                            errorMessage = "Sorry, I wasn't able to respond. Please try again."
+                        }
+                        
                         updatedChat.messages[updatedChat.messages.count - 1] = Message(
-                            content: "Sorry, I wasn't able to respond. Please try again.",
+                            content: errorMessage,
                             isUser: false
                         )
                         self.updateChat(updatedChat)

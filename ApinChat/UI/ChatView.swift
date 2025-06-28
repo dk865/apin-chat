@@ -94,9 +94,16 @@ struct ChatInputView: View {
             ModelSelectorView()
                 .padding(.vertical, 8)
             
+            // Model status indicator
+            if chatStore.modelAvailability != .available {
+                ModelStatusIndicator()
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+            
             // Input field
             HStack(spacing: 12) {
-                TextField("Message...", text: $messageText, axis: .vertical)
+                TextField(placeholderText, text: $messageText, axis: .vertical)
                     .focused($isTextFieldFocused)
                     .padding(12)
                     .background(themeManager.surfaceBackground)
@@ -104,19 +111,19 @@ struct ChatInputView: View {
                     .font(themeManager.bodyFont)
                     .foregroundColor(themeManager.textPrimary)
                     .lineLimit(5)
-                    .disabled(chatStore.isProcessingResponse)
+                    .disabled(chatStore.isProcessingResponse || chatStore.modelAvailability != .available)
                 
                 Button(action: sendMessage) {
                     Image(systemName: chatStore.isProcessingResponse ? "stop.circle.fill" : "arrow.up.circle.fill")
                         .resizable()
                         .frame(width: 32, height: 32)
                         .foregroundColor(
-                            messageText.isEmpty && !chatStore.isProcessingResponse 
+                            (messageText.isEmpty && !chatStore.isProcessingResponse) || chatStore.modelAvailability != .available
                                 ? themeManager.textSecondary 
                                 : themeManager.primary
                         )
                 }
-                .disabled(messageText.isEmpty && !chatStore.isProcessingResponse)
+                .disabled(messageText.isEmpty && !chatStore.isProcessingResponse || chatStore.modelAvailability != .available)
                 .animation(.easeInOut, value: chatStore.isProcessingResponse)
             }
             .padding(.horizontal)
@@ -131,6 +138,21 @@ struct ChatInputView: View {
         }
     }
     
+    private var placeholderText: String {
+        switch chatStore.modelAvailability {
+        case .available:
+            return "Message..."
+        case .unavailable(.modelNotReady):
+            return "AI model downloading..."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Enable Apple Intelligence to chat"
+        case .unavailable(.deviceNotEligible):
+            return "Device not compatible"
+        case .unavailable:
+            return "AI model unavailable"
+        }
+    }
+    
     private func sendMessage() {
         if chatStore.isProcessingResponse {
             // TODO: Implement cancellation
@@ -138,6 +160,8 @@ struct ChatInputView: View {
         }
         
         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard chatStore.modelAvailability == .available else { return }
+        
         let text = messageText
         messageText = ""
         chatStore.sendMessage(text)
@@ -177,6 +201,89 @@ struct ModelSelectorView: View {
                 }
             }
             .padding(.horizontal)
+        }
+    }
+}
+
+struct ModelStatusIndicator: View {
+    @EnvironmentObject private var chatStore: ChatStore
+    @EnvironmentObject private var themeManager: ThemeManager
+    
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: statusIcon)
+                .font(.caption)
+                .foregroundColor(statusColor)
+            
+            Text(statusMessage)
+                .font(themeManager.captionFont)
+                .foregroundColor(statusColor)
+            
+            Spacer()
+            
+            if chatStore.modelAvailability == .unavailable(.modelNotReady) {
+                Button("Check Again") {
+                    chatStore.checkModelAvailability()
+                }
+                .font(themeManager.captionFont)
+                .foregroundColor(themeManager.primary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(statusBackgroundColor)
+        .cornerRadius(8)
+    }
+    
+    private var statusIcon: String {
+        switch chatStore.modelAvailability {
+        case .available:
+            return "checkmark.circle"
+        case .unavailable(.modelNotReady):
+            return "arrow.down.circle"
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "gear"
+        case .unavailable(.deviceNotEligible):
+            return "exclamationmark.triangle"
+        case .unavailable:
+            return "exclamationmark.circle"
+        }
+    }
+    
+    private var statusMessage: String {
+        switch chatStore.modelAvailability {
+        case .available:
+            return "AI model ready"
+        case .unavailable(.modelNotReady):
+            return "AI model downloading..."
+        case .unavailable(.appleIntelligenceNotEnabled):
+            return "Apple Intelligence disabled"
+        case .unavailable(.deviceNotEligible):
+            return "Device not compatible"
+        case .unavailable:
+            return "AI model unavailable"
+        }
+    }
+    
+    private var statusColor: Color {
+        switch chatStore.modelAvailability {
+        case .available:
+            return .green
+        case .unavailable(.modelNotReady):
+            return .orange
+        default:
+            return .red
+        }
+    }
+    
+    private var statusBackgroundColor: Color {
+        switch chatStore.modelAvailability {
+        case .available:
+            return Color.green.opacity(0.1)
+        case .unavailable(.modelNotReady):
+            return Color.orange.opacity(0.1)
+        default:
+            return Color.red.opacity(0.1)
         }
     }
 }

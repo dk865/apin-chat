@@ -58,14 +58,33 @@ enum AIModelType: String, CaseIterable, Identifiable, Codable {
         }
     }
     
-    var systemPrompt: String {
+    var instructions: String {
         switch self {
         case .conversation: 
-            return "You are Apin, a helpful AI assistant. Respond conversationally and be concise."
+            return """
+                You are Apin, a helpful AI assistant. Respond conversationally and be concise. 
+                Keep your responses friendly and natural while being helpful and informative.
+                """
         case .creative:
-            return "You are Apin, a creative AI assistant. Feel free to be imaginative, expressive, and think outside the box."
+            return """
+                You are Apin, a creative AI assistant. Feel free to be imaginative, expressive, 
+                and think outside the box. Use creative language and explore interesting perspectives 
+                while remaining helpful.
+                """
         case .precise:
-            return "You are Apin, a precise AI assistant. Focus on accuracy, facts, and clear information."
+            return """
+                You are Apin, a precise AI assistant. Focus on accuracy, facts, and clear information. 
+                Provide well-structured responses with specific details. Respond as briefly as possible 
+                while maintaining completeness.
+                """
+        }
+    }
+    
+    var temperature: Double {
+        switch self {
+        case .conversation: return 0.7
+        case .creative: return 1.2
+        case .precise: return 0.3
         }
     }
 }
